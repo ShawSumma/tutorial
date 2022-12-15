@@ -53,11 +53,11 @@ int main(int arg_count, char **arg_values) {
                 opcode_buffer_head += 1;
                 break;
             case COMPILED_TOGGLE_AND_RESTART:
-                *opcode_buffer_head = 3;
+                *opcode_buffer_head = COMPILED_TOGGLE_AND_PASS;
                 opcode_buffer_head = opcode_buffer_base;
                 break;
             case COMPILED_TOGGLE_AND_PASS:
-                *opcode_buffer_head = 2;
+                *opcode_buffer_head = COMPILED_TOGGLE_AND_RESTART;
                 opcode_buffer_head += 1;
                 break;
             default:

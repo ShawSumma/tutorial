@@ -1,210 +1,212 @@
-# Writing a VM
+# A Virtual Machine
 
-This document explains how to write a fast VM.
+The virtual machine we will be implementing is very simple.
 
-- [Writing a VM](#writing-a-vm)
-- [Choosing a Host Language](#choosing-a-host-language)
-- [Example 1](#example-1)
-  - [First Try Interpreter](#first-try-interpreter)
-  - [First Attempt Optimizing](#first-attempt-optimizing)
-  - [Second](#second)
+It has no memory and only one regiser, and only 4 distinct instructions.
 
-# Choosing a Host Language
+# Registers
 
-Your host language of choice will need to have some very low level features.
+There is only one register, the [Accumulator Register](#accumulator-register)
 
-* It must have computed goto.
-* It should not be garbage collected.
-* It must be able to do untaged/raw unions.
+## Accumulator Register
 
-I'll choose C for this document.
+The accumulator register starts at value `0`.
 
-# Example 1
+The only instruction that does anything to the Accumulator Register is [Increment Accumulator Register](#increment-accumulator-register).
 
-For this example the bytecode definition will be the following grammar
+# Opcodes
 
-```
-program: instr* exit_instr
-exit_instr: "x"
+* `t` = [Replace Self with `f` and Restart](#toggle-and-restart)
+* `f` = [Replace Self with `t` and Continue](#toggle-and-continue)
+* `+` = [Increment Accumulator Register](#increment-the-accumulator)
 
-instr: toggle_instr | fallthrough_instr
-fallthrough: "f"
-toggle_instr: "t"
-inc_instr: "+"
-```
+## Toggle and Restart
 
-## First Try Interpreter
+This opcode replaces itself with the [Toggle and Continue](#toggle-and-continue) opcode.
+
+It then sets the place to interpret from to the beginning of the code.
+
+- does not reset the [accumulator](#accumulator-register) to 0
+- represented by the source code: `t`
+
+## Toggle and Continue
+
+This opcode replaces itself with the [Toggle and Restart](#toggle-and-restart) opcode.
+
+It then moves on to the next instruction.
+
+- represented by the source code: `f`
+
+## Increment Accumulator Register
+
+This opcode 1 to the [Accumulator Register](#accumulator-register).
+
+- represented by the source code: `+`
+
+## end of opcodes
+
+This opcode prints the value of the [Accumulator Register](#accumulator-register) and shuts down the virtual machine.
+
+- represented by the null character in source code.
+    - C strings have a null character after them by default.
+
+# First Implementation
+
+For the first implementation simplicity is king.
 
 ```c
 #include <stdio.h>
 
-int main(int argc, char **argv) {
-    for (int argno = 1; argno < argc; argno++) {
-        int reg = 0;
-        char *arg = argv[argno];
-        while (*arg != '\0') {
-            switch (*arg) {
-            case '+':
-                reg += 1;
-                arg += 1;
+enum {
+    STOP_RUNNING = '\0',
+    INCREMENT_TOTAL = '+',
+    TOGGLE_AND_RESTART = 't',
+    TOGGLE_AND_PASS = 'f',
+};
+
+int main(int arg_count, char **arg_values) {
+    for (int argument_number = 1; argument_number < arg_count; argument_number++) {
+        int accumulator_register = 0;
+        char *source_string_base = arg_values[argument_number];
+        char *source_string = source_string_base;
+        while (*source_string != STOP_RUNNING) {
+            switch (*source_string) {
+            case INCREMENT_TOTAL:
+                accumulator_register += 1;
+                source_string += 1;
                 break;
-            case 't':
-                *arg = 'f';
-                arg = argv[argno];
+            case TOGGLE_AND_RESTART:
+                *source_string = TOGGLE_AND_PASS;
+                source_string = source_string_base;
                 break;
-            case 'f':
-                *arg = 't';
-                arg += 1;
-                break;
-            }
-        }
-        printf("%i", reg);
-    }
-}
-```
-
-To build and run this type the following into any shell.
-
-```sh
-cc src/ex1/basic.c -o bin/ex1-basic -O3 -flto -fomit-frame-pointer
-time ./bin/ex1-basic "+tttttttttttttttttttttttttttt"
-```
-
-You should see `268435456` for the output of the program, along with timing information.
-
-On my machine it takes about 0.8 seconds. This is a good start, but we can do better.
-
-## First Attempt Optimizing
-
-Let's start by optimizing what we have down.
-
-One of the first things to do is try to use packed constants.
-
-```c
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-uint8_t *compile(char *arg) {
-    uint8_t *ret = malloc(sizeof(uint8_t) * (strlen(arg) + 1));
-    uint8_t *cur = ret;
-    while (true) {
-        switch (*arg) {
-        case '\0':
-            *cur++ = 0;
-            return ret;
-        case '+':
-            *cur++ = 1;
-            break;
-        case 't':
-            *cur++ = 2;
-            break;
-        case 'f':
-            *cur++ = 3;
-            break;
-        }
-        arg += 1;
-    }
-}
-
-int main(int argc, char **argv) {
-    for (int argno = 1; argno < argc; argno++) {
-        int reg = 0;
-        uint8_t *init = compile(argv[argno]);
-        uint8_t *cur = init;
-        while (true) {
-            switch (*cur) {
-            case 0:
-                goto end;
-            case 1:
-                reg += 1;
-                cur += 1;
-                break;
-            case 2:
-                *cur = 3;
-                cur = init;
-                break;
-            case 3:
-                *cur = 2;
-                cur += 1;
+            case TOGGLE_AND_PASS:
+                *source_string = TOGGLE_AND_RESTART;
+                source_string += 1;
                 break;
             default:
                 __builtin_unreachable();
             }
         }
-    end:;
-        free(init);
-        printf("%i", reg);
+        printf("%i\n", accumulator_register);
     }
 }
 ```
 
-This code is much better performing, and for this example it is the fastest way to accurately interpret the code.
+It uses no speical speed tricks, other than making the default case not have to be handled by the compiler.
 
-## Second Attempt Optimizing
+# Second Interpreter
 
-This code uses computed goto, which scales much more nicely.
-
-Notice how there is no opcode table, it references them directly as the compiler is inline to the interpeter function.
+For the second interpreter the approach will be to change the expensive check from a sparse switch, into a number `0`, `1`, `2`, or `3`.
+This is because in C and other low level languages, branches like switch are more expensive when they are sparse.
 
 ```c
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+int thing1(void);
+int thing2(void);
+int thing3(void);
+int thing4(void);
+int thing5(void);
 
-int main(int argc, char **argv) {
-    for (int argno = 1; argno < argc; argno++) {
-        int reg = 0;
-        char *arg = argv[argno];
-        void **base = (void **) malloc(sizeof(void *) * (strlen(arg) + 1));
-        int head = 0;
-        while (true) {
-            switch (arg[head]) {
-            case '\0':
-                base[head] = &&do_zero;
-                break;
-            case '+':
-                base[head] = &&do_plus;
-                break;
-            case 't':
-                base[head] = &&do_toggle;
-                break;
-            case 'f':
-                base[head] = &&do_fall;
-                break;
-            }
-            if (arg[head] == '\0') {
-                break;
-            }
-            head += 1;
-        }
-        void **code = base;
-        goto **code;
-        do_zero: {
-            free(base);
-            printf("%i", reg);
-            continue;
-        }
-        do_plus: {
-            code += 1;
-            reg += 1;
-            goto **code;
-        }
-        do_toggle: {
-            *code = &&do_fall;
-            code = base;
-            goto **code;
-        }
-        do_fall: {
-            *code = &&do_toggle;
-            code += 1;
-            goto **code;
-        }
+int cases(int some_value) {
+    switch (some_value) {
+    case '\0':
+        thing1();
+        break;
+    case 's':
+        thing2();
+        break;
+    case 'h':
+        thing3();
+        break;
+    case 'a':
+        thing4();
+        break;
+    case 'w':
+        thing5();
+        break;
+    default:
+        __builtin_unreachable();
     }
 }
 ```
 
-This code runs about as fast as the first try optimizing, but should have better scalability due to being able to use more than 256 opcodes without changing anything.
+Using [godbolt](https://godbolt.org/) I see that on x86 the above C compiles into the below assembly.
+
+```x86asm
+cases:
+        cmp     edi, 104
+        je      .L2
+        jle     .L11
+        cmp     edi, 115
+        je      .L6
+        jmp     thing5
+.L11:
+        test    edi, edi
+        je      .L4
+        jmp     thing4
+.L2:
+        jmp     thing3
+.L4:
+        jmp     thing1
+.L6:
+        jmp     thing2
+```
+
+Notice all the instructions `je`, `jle`, and the second `je` ? They are all jumps, which are often slow.
+
+The following C fixes this issue.
+
+```c
+int thing1(void);
+int thing2(void);
+int thing3(void);
+int thing4(void);
+int thing5(void);
+
+int cases(int some_value) {
+    switch (some_value) {
+    case 0:
+        thing1();
+        break;
+    case 1:
+        thing2();
+        break;
+    case 2:
+        thing3();
+        break;
+    case 3:
+        thing4();
+        break;
+    case 4:
+        thing5();
+        break;
+    default:
+        __builtin_unreachable();
+    }
+}
+```
+
+Using [godbolt](https://godbolt.org/) I see that on x86 the above C compiles into the below assembly.
+
+```x86asm
+cases:
+        mov     edi, edi
+        jmp     [QWORD PTR .L4[0+rdi*8]]
+.L4:
+        .quad   .L8
+        .quad   .L7
+        .quad   .L6
+        .quad   .L5
+        .quad   .L3
+.L5:
+        jmp     thing4
+.L6:
+        jmp     thing3
+.L7:
+        jmp     thing2
+.L8:
+        jmp     thing1
+.L3:
+        jmp     thing5
+```
+
+It uses a jump table and a single `jmp` with an index into the table. This is slightly slower than a single `je` or `jle` but not two or three.

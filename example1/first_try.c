@@ -27,6 +27,8 @@ int main(int arg_count, char **arg_values) {
                 *source_string = TOGGLE_AND_RESTART;
                 source_string += 1;
                 break;
+            default:
+                __builtin_unreachable();
             }
         }
         printf("%i\n", accumulator_register);
