@@ -210,3 +210,153 @@ cases:
 ```
 
 It uses a jump table and a single `jmp` with an index into the table. This is slightly slower than a single `je` or `jle` but not two or three.
+
+## Getting the Compiler to use Jump Tables
+
+Using this knowledge we can get the compiler to use a jump table for our switch case.
+
+The following C generally optimizes better.
+
+```c
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+enum {
+    STOP_RUNNING = '\0',
+    INCREMENT_TOTAL = '+',
+    TOGGLE_AND_RESTART = 't',
+    TOGGLE_AND_PASS = 'f',
+};
+
+enum {
+    COMPILED_STOP_RUNNING,
+    COMPILED_INCREMENT_TOTAL,
+    COMPILED_TOGGLE_AND_RESTART,
+    COMPILED_TOGGLE_AND_PASS,
+};
+
+uint8_t *compile_string_to_opcode_buffer(char *source_string) {
+    uint8_t *opcode_buffer = malloc(sizeof(uint8_t) * (strlen(source_string) + 1));
+    uint8_t *opcode_buffer_head = opcode_buffer;
+    for (int source_index = 0; source_string[source_index] != STOP_RUNNING; source_index += 1) {
+        switch (source_string[source_index]) {
+        case INCREMENT_TOTAL:
+            *opcode_buffer_head++ = COMPILED_INCREMENT_TOTAL;
+            break;
+        case TOGGLE_AND_RESTART:
+            *opcode_buffer_head++ = COMPILED_TOGGLE_AND_RESTART;
+            break;
+        case TOGGLE_AND_PASS:
+            *opcode_buffer_head++ = COMPILED_TOGGLE_AND_PASS;
+            break;
+        }
+    }
+    *opcode_buffer_head++ = COMPILED_STOP_RUNNING;
+    return opcode_buffer;
+}
+
+int main(int arg_count, char **arg_values) {
+    for (int argument_number = 1; argument_number < arg_count; argument_number++) {
+        int accumulator_register = 0;
+        uint8_t *opcode_buffer_base = compile_string_to_opcode_buffer(arg_values[argument_number]);
+        uint8_t *opcode_buffer_head = opcode_buffer_base;
+        for (;;) {
+            switch (*opcode_buffer_head) {
+            case COMPILED_STOP_RUNNING:
+                goto end;
+            case COMPILED_INCREMENT_TOTAL:
+                accumulator_register += 1;
+                opcode_buffer_head += 1;
+                break;
+            case COMPILED_TOGGLE_AND_RESTART:
+                *opcode_buffer_head = COMPILED_TOGGLE_AND_PASS;
+                opcode_buffer_head = opcode_buffer_base;
+                break;
+            case COMPILED_TOGGLE_AND_PASS:
+                *opcode_buffer_head = COMPILED_TOGGLE_AND_RESTART;
+                opcode_buffer_head += 1;
+                break;
+            default:
+                __builtin_unreachable();
+            }
+        }
+    end:;
+        free(opcode_buffer_base);
+        printf("%i\n", accumulator_register);
+    }
+}
+```
+
+This nets some performance gain when using PGO builds, as the compiler wrongly thinks we do not want a jump table on some architectures.
+
+# Third Intepreter - Under Construction
+
+Uses computed goto. 
+
+```c
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+enum {
+    STOP_RUNNING = '\0',
+    INCREMENT_TOTAL = '+',
+    TOGGLE_AND_RESTART = 't',
+    TOGGLE_AND_PASS = 'f',
+};
+
+int main(int arg_count, char **arg_values) {
+    for (int argument_number = 1; argument_number < arg_count; argument_number++) {
+        int reg = 0;
+        char *source_buffer = arg_values[argument_number];
+        void **computed_goto_buffer = malloc(sizeof(void *) * (strlen(source_buffer) + 1));
+        int source_index = 0;
+        while (true) {
+            switch (source_buffer[source_index]) {
+            case STOP_RUNNING:
+                computed_goto_buffer[source_index] = &&execute_stop_running;
+                break;
+            case INCREMENT_TOTAL:
+                computed_goto_buffer[source_index] = &&execute_increment_total;
+                break;
+            case TOGGLE_AND_RESTART:
+                computed_goto_buffer[source_index] = &&execute_toggle_and_restart;
+                break;
+            case TOGGLE_AND_PASS:
+                computed_goto_buffer[source_index] = &&execute_toggle_and_pass;
+                break;
+            }
+            if (source_buffer[source_index] == '\0') {
+                break;
+            }
+            source_index += 1;
+        }
+        void **code = computed_goto_buffer;
+        goto **code;
+        execute_stop_running: {
+            free(computed_goto_buffer);
+            printf("%i\n", reg);
+            continue;
+        }
+        execute_increment_total: {
+            code += 1;
+            reg += 1;
+            goto **code;
+        }
+        execute_toggle_and_restart: {
+            *code = &&execute_toggle_and_pass;
+            code = computed_goto_buffer;
+            goto **code;
+        }
+        execute_toggle_and_pass: {
+            *code = &&execute_toggle_and_restart;
+            code += 1;
+            goto **code;
+        }
+    }
+}
+```
